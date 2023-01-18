@@ -16,30 +16,63 @@ export default async function restore(): Promise<boolean> {
     const restoreKeys = getRestoreKeys();
     const cachePaths = getCachePaths();
 
-    const cacheKey = await cache.restoreCache(
-        cachePaths,
-        primaryKey,
-        restoreKeys
-    );
-    if (!cacheKey) {
-        const message = `Cache not found for input keys: ${[
-            primaryKey,
-            ...restoreKeys
-        ].join(", ")}`;
-        if (isCacheRequired()) {
-            throw new Error(message);
-        } else {
-            core.info(message);
-            utils.setCacheHitOutput(false);
-            return false;
+    for (var i = 0;; i++) {
+        console.info(`Starting restore attempt ${i}`)
+        try {
+            const cacheKey = await cache.restoreCache(
+                cachePaths,
+                primaryKey,
+                restoreKeys
+            );
+            if (!cacheKey) {
+                const message = `Cache not found for input keys: ${[
+                    primaryKey,
+                    ...restoreKeys
+                ].join(", ")}`;
+                if (isCacheRequired()) {
+                    throw new Error(message);
+                } else {
+                    core.info(message);
+                    utils.setCacheHitOutput(false);
+                    return false;
+                }
+            }
+
+            // Store the matched cache key
+            utils.setCacheState(cacheKey);
+
+            const isExactKeyMatch = utils.isExactKeyMatch(primaryKey, cacheKey);
+            utils.setCacheHitOutput(isExactKeyMatch);
+
+            core.info(`Cache restored from key: ${cacheKey}`);
+            return true;
+        } catch (error: unknown) {
+            // When cache is not required, any non-input failures (such as network
+            // failures) are allowed so they don't unnecessarily hold up the job
+
+            try {
+                if (isCacheRequired()) {
+                    throw error;
+                } else {
+                    if (error instanceof cache.ValidationError) {
+                        throw error;
+                    }
+                    if (error instanceof Error) {
+                        utils.logWarning(error.message);
+                        utils.setCacheHitOutput(false);
+
+                        if (i<10) {
+                            continue;
+                        }
+                        return false;
+                    }
+                }
+            } catch (error) {
+                if (i<10) {
+                    continue;
+                }
+                throw error;
+            }
         }
     }
-
-    // Store the matched cache key
-    utils.setCacheState(cacheKey);
-
-    const isExactKeyMatch = utils.isExactKeyMatch(primaryKey, cacheKey);
-    utils.setCacheHitOutput(isExactKeyMatch);
-    core.info(`Cache restored from key: ${cacheKey}`);
-    return true;
 }
